@@ -1,0 +1,34 @@
+[
+    {
+        "family_name": "BIZ Manufacture",
+        "family_code": "f3303d95-8454-4e80-bb25-38513d358a11",
+        "is_enterprise": true,
+        "variant_name": "BIZ Manufacture",
+        "Harga": "Rp35.000,-",
+        "order": 1
+    },
+    {
+       "family_name": "BIZ Data+",
+        "family_code": "53de8ac3-521d-43f5-98ce-749ad0481709",
+        "is_enterprise": true,
+        "variant_name": "BIZ Data+",
+        "Harga": "Rp57.000,-",
+        "order": 4
+    },
+    {
+        "family_name": "BIZ Prepaid",
+        "family_code": "20342db0-e03e-4dfd-b2d0-cd315d7ddc36",
+        "is_enterprise": true,
+        "variant_name": "BIZ Prepaid",
+        "Harga": "Rp49.000,-",
+        "order": 1
+    },
+    {
+        "family_name": "Conference",
+        "family_code": "5dab52d5-6f02-4678-b72f-088396ceb113",
+        "is_enterprise": true,
+        "variant_name": "Conference",
+        "Harga": "Rp10.000,-",
+        "order": 3
+    }
+]
