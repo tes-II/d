@@ -34,47 +34,53 @@ _MONTH_ID = {
     7: "Jul", 8: "Agu", 9: "Sep", 10: "Okt", 11: "Nov", 12: "Des"
 }
 
+
 def _normalize_ts_input(ts):
     """
-    Normalize a timestamp-like value into seconds (int) if possible.
-    Handles:
-     - int/float (seconds or milliseconds)
-     - numeric strings
-     - otherwise return None
+    Normalize various timestamp representations into seconds (int).
+    - Accepts int/float (seconds or milliseconds), numeric strings (seconds or ms).
+    - Returns None if value cannot be interpreted as timestamp.
     """
     try:
         if ts is None:
             return None
-        # numeric types
+
+        # If already numeric types
         if isinstance(ts, (int, float)):
             val = int(ts)
-        # numeric string
-        elif isinstance(ts, str) and ts.isdigit():
-            val = int(ts)
+        # Numeric string (allow negative? usually no — keep simple)
+        elif isinstance(ts, str):
+            s = ts.strip()
+            # Accept purely numeric strings
+            if s.isdigit():
+                val = int(s)
+            else:
+                # Try to parse ISO-like numeric fraction? not necessary here
+                return None
         else:
             return None
 
-        # if it's very large, assume milliseconds and convert to seconds
-        if val > 3_000_000_000_000:  # very large improbable; keep safe margin
-            val = int(val / 1000)
-        elif val > 3_000_000_000:  # typical ms vs s threshold (~ year 2065)
+        # If value looks like milliseconds ( > year 3000 in seconds ), convert to seconds.
+        # Use conservative threshold: anything > 3_000_000_000 -> probably ms.
+        if val > 3_000_000_000:
             val = int(val / 1000)
         return val
     except Exception:
         return None
 
+
 def _format_ts(ts):
     try:
-        # try to normalize numeric-like values (ms -> s)
         norm = _normalize_ts_input(ts)
         if norm is not None:
             dt = datetime.fromtimestamp(int(norm))
             mon = _MONTH_ID.get(dt.month, dt.strftime("%b"))
             return f"{dt.day:02d} {mon} {dt.year} {dt.strftime('%H:%M:%S')}"
-        # if not numeric, just stringify (ISO strings will be printed)
+        # If it's a non-numeric string (maybe ISO), try to return it as-is
         return str(ts)
     except Exception:
         return str(ts)
+
 
 def _days_until(ts):
     try:
@@ -88,6 +94,7 @@ def _days_until(ts):
     except Exception:
         return None
 
+
 def _get_bar_width(min_w: int = 12, max_w: int = 48, reserved: int = 60) -> int:
     try:
         total = console.size.width or 80
@@ -95,6 +102,7 @@ def _get_bar_width(min_w: int = 12, max_w: int = 48, reserved: int = 60) -> int:
         return max(min_w, min(max_w, avail))
     except Exception:
         return min_w
+
 
 def _render_progress_bar(remaining: int, total: int, width: int | None = None, fill_char: str = "▒", empty_char: str = "░"):
     """
@@ -122,7 +130,7 @@ def _render_progress_bar(remaining: int, total: int, width: int | None = None, f
         empty_part = empty_char * (width - filled)
         pct = int(round(frac * 100))
 
-        # color selection (cleaned up)
+        # color selection (cleaned)
         if pct >= 100:
             color = "neon_green"
         elif pct >= 50:
@@ -136,6 +144,7 @@ def _render_progress_bar(remaining: int, total: int, width: int | None = None, f
     except Exception:
         bar = empty_char * width
         return f"[dim]{bar}[/] 0%"
+
 
 def _compute_quotas_summary(quotas):
     total = 0
@@ -152,10 +161,11 @@ def _compute_quotas_summary(quotas):
                 continue
     return remaining, total
 
+
 def show_package_details(api_key, tokens, package_option_code, is_enterprise, option_order = -1):
     active_user = AuthInstance.active_user
     subscription_type = active_user.get("subscription_type", "") if active_user else ""
-    
+
     clear_screen()
 
     with loading_animation("Fetching package details..."):
@@ -173,17 +183,17 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
     option_name = package.get("package_option", {}).get("name","")
     family_name = package.get("package_family", {}).get("name","")
     variant_name = package.get("package_detail_variant", "").get("name","")
-    
+
     title = f"{family_name} - {variant_name} - {option_name}".strip()
-    
+
     parent_code = package.get("package_addon", {}).get("parent_code","")
     if parent_code == "":
         parent_code = "N/A"
-    
+
     token_confirmation = package.get("token_confirmation", "")
     ts_to_sign = package.get("timestamp", "")
     payment_for = package.get("package_family", {}).get("payment_for", "")
-    
+
     payment_items = [
         PaymentItem(
             item_code=package_option_code,
@@ -194,7 +204,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
             token_confirmation=token_confirmation,
         )
     ]
-    
+
     # Details Table
     details_table = Table(show_header=False, box=None, padding=(0, 1))
     details_table.add_column("Key", style="neon_cyan", justify="right")
@@ -209,7 +219,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
     details_table.add_row("Kode Paket:", f"[neon_yellow]{package_option_code}[/]")
     details_table.add_row("Parent Code:", parent_code)
 
-    # try multiple possible locations for timestamps
+    # Try multiple possible locations for activation/reset timestamps (package-level, option-level, nested)
     activated_ts = (
         package.get("activated_at")
         or package.get("active_since")
@@ -312,12 +322,12 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
 
         if payment_for == "":
             payment_for = "BUY_PACKAGE"
-        
+
         if payment_for == "REDEEM_VOUCHER":
             menu_table.add_row("B", "Ambil sebagai bonus")
             menu_table.add_row("BA", "Kirim bonus")
             menu_table.add_row("L", "Beli dengan Poin")
-        
+
         if option_order != -1:
             menu_table.add_row("0", "Tambah ke Bookmark")
         menu_table.add_row("00", "Kembali ke daftar paket")
@@ -342,7 +352,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
                 console.print("[warning]Paket sudah ada di bookmark.[/]")
             pause()
             continue
-        
+
         elif choice == '1':
             settlement_balance(
                 api_key,
@@ -375,13 +385,13 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
             return True
         elif choice == '4':
             decoy = DecoyInstance.get_decoy("balance")
-            
+
             decoy_package_detail = get_package(
                 api_key,
                 tokens,
                 decoy["option_code"],
             )
-            
+
             if not decoy_package_detail:
                 console.print("[error]Failed to load decoy package details.[/]")
                 pause()
@@ -407,13 +417,13 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
                 False,
                 overwrite_amount=overwrite_amount,
             )
-            
+
             if res and res.get("status", "") != "SUCCESS":
                 error_msg = res.get("message", "Unknown error")
                 if "Bizz-err.Amount.Total" in error_msg:
                     error_msg_arr = error_msg.split("=")
                     valid_amount = int(error_msg_arr[1].strip())
-                    
+
                     print(f"Adjusted total amount to: {valid_amount}")
                     res = settlement_balance(
                         api_key,
@@ -431,13 +441,13 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
             return True
         elif choice == '5':
             decoy = DecoyInstance.get_decoy("balance")
-            
+
             decoy_package_detail = get_package(
                 api_key,
                 tokens,
                 decoy["option_code"],
             )
-            
+
             if not decoy_package_detail:
                 console.print("[error]Failed to load decoy package details.[/]")
                 pause()
@@ -464,13 +474,13 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
                 overwrite_amount=overwrite_amount,
                 token_confirmation_idx=1
             )
-            
+
             if res and res.get("status", "") != "SUCCESS":
                 error_msg = res.get("message", "Unknown error")
                 if "Bizz-err.Amount.Total" in error_msg:
                     error_msg_arr = error_msg.split("=")
                     valid_amount = int(error_msg_arr[1].strip())
-                    
+
                     print(f"Adjusted total amount to: {valid_amount}")
                     res = settlement_balance(
                         api_key,
@@ -489,13 +499,13 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
             return True
         elif choice == '6':
             decoy = DecoyInstance.get_decoy("qris")
-            
+
             decoy_package_detail = get_package(
                 api_key,
                 tokens,
                 decoy["option_code"],
             )
-            
+
             if not decoy_package_detail:
                 console.print("[error]Failed to load decoy package details.[/]")
                 pause()
@@ -511,7 +521,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
                     token_confirmation=decoy_package_detail["token_confirmation"],
                 )
             )
-            
+
             console.print(Panel(
                 f"Harga Paket Utama: Rp {price}\nHarga Paket Decoy: Rp {decoy_package_detail['package_option']['price']}\n\nSilahkan sesuaikan amount (trial & error, 0 = malformed)",
                 title="DECOY QRIS INFO",
@@ -526,18 +536,18 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
                 True,
                 token_confirmation_idx=1
             )
-            
+
             pause()
             return True
         elif choice == '7':
             decoy = DecoyInstance.get_decoy("qris0")
-            
+
             decoy_package_detail = get_package(
                 api_key,
                 tokens,
                 decoy["option_code"],
             )
-            
+
             if not decoy_package_detail:
                 console.print("[error]Failed to load decoy package details.[/]")
                 pause()
@@ -553,7 +563,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
                     token_confirmation=decoy_package_detail["token_confirmation"],
                 )
             )
-            
+
             console.print(Panel(
                 f"Harga Paket Utama: Rp {price}\nHarga Paket Decoy: Rp {decoy_package_detail['package_option']['price']}\n\nSilahkan sesuaikan amount (trial & error, 0 = malformed)",
                 title="DECOY QRIS INFO",
@@ -568,7 +578,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
                 True,
                 token_confirmation_idx=1
             )
-            
+
             pause()
             return True
         elif choice == '8':
@@ -637,6 +647,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
     pause()
     sys.exit(0)
 
+
 def get_packages_by_family(
     family_code: str,
     is_enterprise: bool | None = None,
@@ -648,9 +659,9 @@ def get_packages_by_family(
         console.print("[error]No active user tokens found.[/]")
         pause()
         return None
-    
+
     packages = []
-    
+
     with loading_animation("Fetching family packages..."):
         data = get_family(
             api_key,
@@ -659,7 +670,7 @@ def get_packages_by_family(
             is_enterprise,
             migration_type
         )
-    
+
     if not data:
         console.print("[error]Failed to load family data.[/]")
         pause()
@@ -669,7 +680,7 @@ def get_packages_by_family(
     rc_bonus_type = data["package_family"].get("rc_bonus_type", "")
     if rc_bonus_type == "MYREWARDS":
         price_currency = "Poin"
-    
+
     in_package_menu = True
     while in_package_menu:
         clear_screen()
@@ -691,15 +702,15 @@ def get_packages_by_family(
         pkg_table.add_column("No", style="neon_green", justify="right", width=4)
         pkg_table.add_column("Package Name", style="bold white")
         pkg_table.add_column("Price", style="yellow")
-        
+
         package_variants = data["package_variants"]
-        
+
         option_number = 1
 
         # Rebuild packages list each render to ensure correct indexing if needed,
         # though strictly speaking it's static per fetch.
         packages = []
-        
+
         for variant in package_variants:
             variant_name = variant["name"]
             # pkg_table.add_row("", f"[dim]{variant_name}[/]", "") # Section header style
@@ -709,7 +720,7 @@ def get_packages_by_family(
                 price_display = f"{price_currency} {option['price']}"
 
                 full_name = f"{variant_name} - {option_name}"
-                
+
                 packages.append({
                     "number": option_number,
                     "variant_name": variant_name,
@@ -718,7 +729,7 @@ def get_packages_by_family(
                     "code": option["package_option_code"],
                     "option_order": option["order"]
                 })
-                                
+
                 pkg_table.add_row(str(option_number), full_name, price_display)
                 option_number += 1
 
@@ -729,19 +740,19 @@ def get_packages_by_family(
         if pkg_choice == "00":
             in_package_menu = False
             return None
-        
+
         if isinstance(pkg_choice, str) == False or not pkg_choice.isdigit():
             console.print("[error]Input tidak valid. Silakan masukan nomor paket.[/]")
             pause()
             continue
-        
+
         selected_pkg = next((p for p in packages if p["number"] == int(pkg_choice)), None)
-        
+
         if not selected_pkg:
             console.print("[error]Paket tidak ditemukan. Silakan masukan nomor yang benar.[/]")
             pause()
             continue
-        
+
         show_package_details(
             api_key,
             tokens,
@@ -749,8 +760,9 @@ def get_packages_by_family(
             is_enterprise,
             option_order=selected_pkg["option_order"],
         )
-        
+
     return packages
+
 
 def fetch_my_packages():
     in_my_packages_menu = True
@@ -761,17 +773,17 @@ def fetch_my_packages():
             console.print("[error]No active user tokens found.[/]")
             pause()
             return None
-        
+
         id_token = tokens.get("id_token")
-        
+
         path = "api/v8/packages/quota-details"
-        
+
         payload = {
             "is_enterprise": False,
             "lang": "en",
             "family_member_id": ""
         }
-        
+
         with loading_animation("Fetching my packages..."):
             res = send_api_request(api_key, path, payload, id_token, "POST")
 
@@ -780,9 +792,9 @@ def fetch_my_packages():
             console.print_json(data=res)
             pause()
             return None
-        
+
         quotas = res["data"].get("quotas", [])
-        
+
         clear_screen()
 
         # --- Paket Aktif header ---
@@ -932,23 +944,23 @@ def fetch_my_packages():
                 console.print("[error]Paket tidak ditemukan. Silakan masukan nomor yang benar.[/]")
                 pause()
                 continue
-            
+
             _ = show_package_details(api_key, tokens, selected_pkg["quota_code"], False)
-        
+
         elif choice.startswith("del "):
             del_parts = choice.split(" ")
             if len(del_parts) != 2 or not del_parts[1].isdigit():
                 console.print("[error]Invalid input for delete command.[/]")
                 pause()
                 continue
-            
+
             del_number = int(del_parts[1])
             del_pkg = next((pkg for pkg in my_packages if pkg["number"] == del_number), None)
             if not del_pkg:
                 console.print("[error]Package not found for deletion.[/]")
                 pause()
                 continue
-            
+
             confirm = cyber_input(f"Are you sure you want to unsubscribe from package  {del_number}. {del_pkg['name']}? (y/n)")
             if confirm.lower() == 'y':
                 with loading_animation(f"Unsubscribing from {del_pkg['name']}..."):
