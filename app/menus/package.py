@@ -1,6 +1,5 @@
 import json
 import sys
-import os
 from datetime import datetime
 
 import requests
@@ -196,9 +195,13 @@ def _first_timestamp_from(obj, keys):
     return None
 
 
-def show_package_details(api_key, tokens, package_option_code, is_enterprise, option_order = -1):
+def show_package_details(api_key, tokens, package_option_code, is_enterprise, option_order: int = -1):
     """
     Tampilkan detail paket (ketika user memilih paket di daftar paket).
+
+    Perilaku:
+    - Menggunakan loading_animation seperti v9 saat memanggil get_package.
+    - Di detail, Family Code selalu ditampilkan; jika tidak ada, tampil "N/A".
     """
     active_user = AuthInstance.active_user
     subscription_type = active_user.get("subscription_type", "") if active_user else ""
@@ -217,13 +220,13 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
     detail = display_html(package["package_option"].get("tnc", ""))
     validity = package["package_option"].get("validity", "")
 
-    option_name = package.get("package_option", {}).get("name","")
-    family_name = package.get("package_family", {}).get("name","")
-    variant_name = package.get("package_detail_variant", "").get("name","")
+    option_name = package.get("package_option", {}).get("name", "")
+    family_name = package.get("package_family", {}).get("name", "")
+    variant_name = package.get("package_detail_variant", "").get("name", "")
 
     title = f"{family_name} - {variant_name} - {option_name}".strip()
 
-    parent_code = package.get("package_addon", {}).get("parent_code","")
+    parent_code = package.get("package_addon", {}).get("parent_code", "")
     if parent_code == "":
         parent_code = "N/A"
 
@@ -256,12 +259,14 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
     details_table.add_row("Kode Paket:", f"[neon_yellow]{package_option_code}[/]")
     details_table.add_row("Parent Code:", parent_code)
 
-    # Ambil family code jika tersedia dan letakkan sebelum Masa Aktif Kuota (sesuai permintaan)
+    # Ambil family code hanya dari package_family.package_family_code atau package_family_code (jika ada).
+    # Jika tidak ada, tampilkan "N/A".
     family_code = package.get("package_family", {}).get("package_family_code", "") or package.get("package_family_code", "")
-    if family_code:
-        details_table.add_row("Family Code:", family_code)
+    if not family_code:
+        family_code = "N/A"
+    details_table.add_row("Family Code:", family_code)
 
-    # Cek banyak kemungkinan lokasi field timestamp (dari output debug terlihat berbagai nama)
+    # Cek banyak kemungkinan lokasi field timestamp
     activated_ts = _first_timestamp_from(package, [
         "activated_at",
         "active_since",
@@ -350,8 +355,12 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
 
         print_cyber_panel(benefit_table, title="BENEFITS")
 
-    with loading_animation("Checking addons..."):
-        addons = get_addons(api_key, tokens, package_option_code)
+    # Ambil addons (bungkus try/except supaya gagal aman tanpa pesan)
+    try:
+        with loading_animation("Checking addons..."):
+            addons = get_addons(api_key, tokens, package_option_code)
+    except Exception:
+        addons = None
 
     console.print(Panel(detail or "No terms available.", title="[neon_pink]SnK MyXL[/]", border_style="dim white"))
 
@@ -814,6 +823,9 @@ def get_packages_by_family(
 def fetch_my_packages():
     """
     Tampilkan paket-paket yang aktif pada akun (menu 'My Packages').
+    - Jika family_code kosong di quota, coba ambil detail paket via get_package (bungkus try/except)
+      untuk membaca package_family.package_family_code. Jika gagal, aman dilewati dan tidak menampilkan error.
+    - Family Code selalu ditampilkan pada panel detail (jika kosong tampilkan 'N/A').
     """
     in_my_packages_menu = True
     while in_my_packages_menu:
@@ -845,30 +857,9 @@ def fetch_my_packages():
 
         quotas = res["data"].get("quotas", [])
 
-        # DEBUG HOOK (SEMENTARA, SELALU AKTIF)
-        # Menampilkan struktur lengkap dan contoh quota[0] agar Anda bisa menyesuaikan field.
-        console.print("[info]DEBUG (SEMENTARA): full response 'data' object from quota-details[/]")
-        try:
-            console.print_json(data=res.get("data", {}))
-        except Exception:
-            console.print(f"[warning]Unable to pretty-print full data. Raw: {res.get('data')}[/]")
-
-        console.print("[info]DEBUG (SEMENTARA): sample quota (first item) if available[/]")
-        if quotas:
-            try:
-                console.print_json(data=quotas[0])
-            except Exception:
-                console.print(f"[warning]Unable to pretty-print quota[0]. Raw: {quotas[0]}[/]")
-        else:
-            console.print("[info]DEBUG (SEMENTARA): quotas list is empty[/]")
-
-        console.print("[warning]DEBUG MODE ENABLED - pausing so you can inspect output. Hapus blok debug ini setelah selesai.[/]")
-        pause()
-        # END DEBUG HOOK
-
         clear_screen()
 
-        # Header paket aktif
+        # --- Paket Aktif header ---
         try:
             active_user = AuthInstance.get_active_user() or {}
             account_number = active_user.get("number", "N/A")
@@ -877,7 +868,7 @@ def fetch_my_packages():
             account_number = "N/A"
             account_name = ""
 
-        # Hitung ringkasan DATA dan render bar keseluruhan
+        # compute overall DATA quota summary and render centered bar (now bar uses remaining/total)
         remaining_bytes, total_bytes = _compute_quotas_summary(quotas)
         if total_bytes > 0:
             numbers = f"{format_quota_byte(remaining_bytes)} / {format_quota_byte(total_bytes)}"
@@ -898,49 +889,31 @@ def fetch_my_packages():
         my_packages = []
         num = 1
 
-        # Jika daftar quotas kosong
+        # If quotas list empty
         if not quotas:
             console.print("[warning]No packages found.[/]")
             pause()
             return None
 
-        # Tampilkan panel detail untuk setiap quota
+        # Show detailed panels for each quota
         for quota in quotas:
             quota_code = quota.get("quota_code", "")
             quota_name = quota.get("name", "")
             product_subscription_type = quota.get("product_subscription_type", "")
             product_domain = quota.get("product_domain", "")
 
-            # Ambil group code jika ada (fallback ke package_group_code)
             group_code = quota.get("group_code", quota.get("package_group_code", ""))
 
-            # Ambil family code jika tersedia
+            # Ambil family code dari quota, bila kosong coba ambil dari detail package
             family_code = quota.get("package_family", {}).get("package_family_code", "") or quota.get("package_family_code", "")
-
-            # Cari banyak kemungkinan lokasi timestamp (aktif sejak / reset)
-            active_since = _first_timestamp_from(quota, [
-                "activated_at",
-                "active_since",
-                "active_date",
-                "active_date_epoch",
-                "package_option.activated_at",
-                "package_option.active_since",
-                "package.activated_at",
-                "package.active_since",
-                "start_date",
-            ])
-            reset_at = _first_timestamp_from(quota, [
-                "reset_at",
-                "reset_quota_at",
-                "end_date",
-                "expired_at",
-                "recurring_date",
-                "recurring_date_summary",
-                "package_option.reset_at",
-                "package_option.reset_quota_at",
-                "package.reset_at",
-                "package.reset_quota_at",
-            ])
+            if not family_code and quota_code:
+                try:
+                    pkg_detail = get_package(api_key, tokens, quota_code)
+                    if isinstance(pkg_detail, dict):
+                        family_code = pkg_detail.get("package_family", {}).get("package_family_code", "") or family_code
+                except Exception:
+                    # supress errors (REQUEST_NOT_ALLOWED, dll.) — jika gagal, family_code tetap kosong
+                    family_code = family_code
 
             detail_tbl = Table(show_header=False, box=None, padding=(0,1))
             detail_tbl.add_column("Key", style="neon_cyan", justify="right")
@@ -950,9 +923,16 @@ def fetch_my_packages():
             detail_tbl.add_row("Quota Code:", f"[neon_yellow]{quota_code}[/]")
             if group_code:
                 detail_tbl.add_row("Group Code:", group_code)
-            # Tambahkan Family Code tepat di atas Masa Aktif Kuota (sesuai permintaan)
-            if family_code:
+
+            # Family Code selalu ditampilkan; jika kosong tampilkan 'N/A'
+            if not family_code:
+                detail_tbl.add_row("Family Code:", "N/A")
+            else:
                 detail_tbl.add_row("Family Code:", family_code)
+
+            active_since = quota.get("activated_at", quota.get("active_since", quota.get("active_date", "")))
+            reset_at = quota.get("reset_at", quota.get("reset_quota_at", quota.get("end_date", quota.get("expired_at", ""))))
+
             if active_since:
                 detail_tbl.add_row("Masa Aktif Kuota:", _format_ts(active_since))
             if reset_at:
@@ -1030,6 +1010,7 @@ def fetch_my_packages():
                 pause()
                 continue
 
+            # Saat user memilih paket yang aktif, panggil show_package_details dengan debug nonaktif
             _ = show_package_details(api_key, tokens, selected_pkg["quota_code"], False)
 
         elif choice.startswith("del "):
