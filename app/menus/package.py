@@ -34,22 +34,55 @@ _MONTH_ID = {
     7: "Jul", 8: "Agu", 9: "Sep", 10: "Okt", 11: "Nov", 12: "Des"
 }
 
+def _normalize_ts_input(ts):
+    """
+    Normalize a timestamp-like value into seconds (int) if possible.
+    Handles:
+     - int/float (seconds or milliseconds)
+     - numeric strings
+     - otherwise return None
+    """
+    try:
+        if ts is None:
+            return None
+        # numeric types
+        if isinstance(ts, (int, float)):
+            val = int(ts)
+        # numeric string
+        elif isinstance(ts, str) and ts.isdigit():
+            val = int(ts)
+        else:
+            return None
+
+        # if it's very large, assume milliseconds and convert to seconds
+        if val > 3_000_000_000_000:  # very large improbable; keep safe margin
+            val = int(val / 1000)
+        elif val > 3_000_000_000:  # typical ms vs s threshold (~ year 2065)
+            val = int(val / 1000)
+        return val
+    except Exception:
+        return None
+
 def _format_ts(ts):
     try:
-        if isinstance(ts, (int, float)):
-            dt = datetime.fromtimestamp(int(ts))
+        # try to normalize numeric-like values (ms -> s)
+        norm = _normalize_ts_input(ts)
+        if norm is not None:
+            dt = datetime.fromtimestamp(int(norm))
             mon = _MONTH_ID.get(dt.month, dt.strftime("%b"))
             return f"{dt.day:02d} {mon} {dt.year} {dt.strftime('%H:%M:%S')}"
+        # if not numeric, just stringify (ISO strings will be printed)
         return str(ts)
     except Exception:
         return str(ts)
 
 def _days_until(ts):
     try:
-        if not isinstance(ts, (int, float)):
+        norm = _normalize_ts_input(ts)
+        if norm is None:
             return None
         now = datetime.now()
-        target = datetime.fromtimestamp(int(ts))
+        target = datetime.fromtimestamp(int(norm))
         delta = target - now
         return delta.days
     except Exception:
@@ -89,15 +122,13 @@ def _render_progress_bar(remaining: int, total: int, width: int | None = None, f
         empty_part = empty_char * (width - filled)
         pct = int(round(frac * 100))
 
-        # color selection per your request
+        # color selection (cleaned up)
         if pct >= 100:
             color = "neon_green"
-        elif pct >= 56:
-            color = "neon_green"
+        elif pct >= 50:
+            color = "neon_yellow"
         elif pct >= 20:
             color = "orange1"
-        elif pct >= 55:
-            color = "red"
         else:
             color = "red"
 
@@ -178,17 +209,22 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
     details_table.add_row("Kode Paket:", f"[neon_yellow]{package_option_code}[/]")
     details_table.add_row("Parent Code:", parent_code)
 
+    # try multiple possible locations for timestamps
     activated_ts = (
         package.get("activated_at")
         or package.get("active_since")
         or package.get("package_option", {}).get("activated_at")
         or package.get("package_option", {}).get("active_since")
+        or package.get("package", {}).get("activated_at")
+        or package.get("package", {}).get("active_since")
     )
     reset_ts = (
         package.get("reset_at")
         or package.get("reset_quota_at")
         or package.get("package_option", {}).get("reset_at")
         or package.get("package_option", {}).get("reset_quota_at")
+        or package.get("package", {}).get("reset_at")
+        or package.get("package", {}).get("reset_quota_at")
     )
 
     if activated_ts:
@@ -794,8 +830,23 @@ def fetch_my_packages():
 
             group_code = quota.get("group_code", quota.get("package_group_code", ""))
 
-            active_since = quota.get("activated_at", quota.get("active_since", ""))
-            reset_at = quota.get("reset_at", quota.get("reset_quota_at", ""))
+            # try multiple possible locations for timestamps (to make sure we display them)
+            active_since = (
+                quota.get("activated_at")
+                or quota.get("active_since")
+                or quota.get("package_option", {}).get("activated_at")
+                or quota.get("package_option", {}).get("active_since")
+                or quota.get("package", {}).get("activated_at")
+                or quota.get("package", {}).get("active_since")
+            )
+            reset_at = (
+                quota.get("reset_at")
+                or quota.get("reset_quota_at")
+                or quota.get("package_option", {}).get("reset_at")
+                or quota.get("package_option", {}).get("reset_quota_at")
+                or quota.get("package", {}).get("reset_at")
+                or quota.get("package", {}).get("reset_quota_at")
+            )
 
             detail_tbl = Table(show_header=False, box=None, padding=(0,1))
             detail_tbl.add_column("Key", style="neon_cyan", justify="right")
