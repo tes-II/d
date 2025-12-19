@@ -163,6 +163,30 @@ def _compute_quotas_summary(quotas):
     return remaining, total
 
 
+def _first_timestamp_from(obj, keys):
+    """
+    Return first non-empty value for any key in keys from obj (dict).
+    Supports nested dicts if key itself contains dots (e.g. 'package_option.activated_at').
+    """
+    for k in keys:
+        if "." in k:
+            parts = k.split(".")
+            cur = obj
+            ok = True
+            for p in parts:
+                if isinstance(cur, dict) and p in cur:
+                    cur = cur[p]
+                else:
+                    ok = False
+                    break
+            if ok and cur not in (None, ""):
+                return cur
+        else:
+            if k in obj and obj[k] not in (None, ""):
+                return obj[k]
+    return None
+
+
 def show_package_details(api_key, tokens, package_option_code, is_enterprise, option_order = -1):
     active_user = AuthInstance.active_user
     subscription_type = active_user.get("subscription_type", "") if active_user else ""
@@ -220,23 +244,30 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
     details_table.add_row("Kode Paket:", f"[neon_yellow]{package_option_code}[/]")
     details_table.add_row("Parent Code:", parent_code)
 
-    # Try multiple possible locations for activation/reset timestamps (package-level, option-level, nested)
-    activated_ts = (
-        package.get("activated_at")
-        or package.get("active_since")
-        or package.get("package_option", {}).get("activated_at")
-        or package.get("package_option", {}).get("active_since")
-        or package.get("package", {}).get("activated_at")
-        or package.get("package", {}).get("active_since")
-    )
-    reset_ts = (
-        package.get("reset_at")
-        or package.get("reset_quota_at")
-        or package.get("package_option", {}).get("reset_at")
-        or package.get("package_option", {}).get("reset_quota_at")
-        or package.get("package", {}).get("reset_at")
-        or package.get("package", {}).get("reset_quota_at")
-    )
+    # Try many possible timestamp keys (from debug output we saw 'active_date', 'end_date', 'expired_at', etc.)
+    activated_ts = _first_timestamp_from(package, [
+        "activated_at",
+        "active_since",
+        "active_date",
+        "package_option.activated_at",
+        "package_option.active_since",
+        "package.active_since",
+        "package.activated_at",
+        "start_date",
+    ])
+    # For reset/end we prefer explicit end-like fields
+    reset_ts = _first_timestamp_from(package, [
+        "reset_at",
+        "reset_quota_at",
+        "end_date",
+        "expired_at",
+        "recurring_date",
+        "recurring_date_summary",
+        "package_option.reset_at",
+        "package_option.reset_quota_at",
+        "package.reset_quota_at",
+        "package.reset_at",
+    ])
 
     if activated_ts:
         details_table.add_row("Masa Aktif Kuota:", _format_ts(activated_ts))
@@ -434,7 +465,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
                         False,
                         overwrite_amount=valid_amount,
                     )
-                    if res and res.get("status", "") == "SUCCESS":
+                    if res and res.get("status") == "SUCCESS":
                         console.print("[neon_green]Purchase successful![/]")
             else:
                 console.print("[neon_green]Purchase successful![/]")
@@ -476,7 +507,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
                 token_confirmation_idx=1
             )
 
-            if res and res.get("status", "") != "SUCCESS":
+            if res and res.get("status") != "SUCCESS":
                 error_msg = res.get("message", "Unknown error")
                 if "Bizz-err.Amount.Total" in error_msg:
                     error_msg_arr = error_msg.split("=")
@@ -492,7 +523,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
                         overwrite_amount=valid_amount,
                         token_confirmation_idx=-1
                     )
-                    if res and res.get("status", "") == "SUCCESS":
+                    if res and res.get("status") == "SUCCESS":
                         console.print("[neon_green]Purchase successful![/]")
             else:
                 console.print("[neon_green]Purchase successful![/]")
@@ -797,8 +828,7 @@ def fetch_my_packages():
         quotas = res["data"].get("quotas", [])
 
         # --- DEBUG HOOK (SEMENTARA, SELALU AKTIF) ---
-        # Ini akan selalu menampilkan struktur response 'data' dan contoh quota[0].
-        # Hentikan dengan menghapus blok ini setelah Anda selesai debugging.
+        # Menampilkan struktur lengkap dan contoh quota[0] agar Anda bisa menyesuaikan field.
         console.print("[info]DEBUG (SEMENTARA): full response 'data' object from quota-details[/]")
         try:
             console.print_json(data=res.get("data", {}))
@@ -865,23 +895,30 @@ def fetch_my_packages():
 
             group_code = quota.get("group_code", quota.get("package_group_code", ""))
 
-            # try multiple possible locations for timestamps (to make sure we display them)
-            active_since = (
-                quota.get("activated_at")
-                or quota.get("active_since")
-                or quota.get("package_option", {}).get("activated_at")
-                or quota.get("package_option", {}).get("active_since")
-                or quota.get("package", {}).get("activated_at")
-                or quota.get("package", {}).get("active_since")
-            )
-            reset_at = (
-                quota.get("reset_at")
-                or quota.get("reset_quota_at")
-                or quota.get("package_option", {}).get("reset_at")
-                or quota.get("package_option", {}).get("reset_quota_at")
-                or quota.get("package", {}).get("reset_at")
-                or quota.get("package", {}).get("reset_quota_at")
-            )
+            # try multiple possible locations for timestamps (expanded to include active_date/end_date/expired_at/etc)
+            active_since = _first_timestamp_from(quota, [
+                "activated_at",
+                "active_since",
+                "active_date",
+                "active_date_epoch",
+                "package_option.activated_at",
+                "package_option.active_since",
+                "package.activated_at",
+                "package.active_since",
+                "start_date",
+            ])
+            reset_at = _first_timestamp_from(quota, [
+                "reset_at",
+                "reset_quota_at",
+                "end_date",
+                "expired_at",
+                "recurring_date",
+                "recurring_date_summary",
+                "package_option.reset_at",
+                "package_option.reset_quota_at",
+                "package.reset_at",
+                "package.reset_quota_at",
+            ])
 
             detail_tbl = Table(show_header=False, box=None, padding=(0,1))
             detail_tbl.add_column("Key", style="neon_cyan", justify="right")
