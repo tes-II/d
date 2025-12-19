@@ -29,7 +29,7 @@ from app.console import console, print_cyber_panel, cyber_input, loading_animati
 from rich.table import Table
 from rich.panel import Panel
 
-# Indonesian month short names mapping
+# Pemetaan nama bulan pendek bahasa Indonesia
 _MONTH_ID = {
     1: "Jan", 2: "Feb", 3: "Mar", 4: "Apr", 5: "Mei", 6: "Jun",
     7: "Jul", 8: "Agu", 9: "Sep", 10: "Okt", 11: "Nov", 12: "Des"
@@ -38,31 +38,28 @@ _MONTH_ID = {
 
 def _normalize_ts_input(ts):
     """
-    Normalize various timestamp representations into seconds (int).
-    - Accepts int/float (seconds or milliseconds), numeric strings (seconds or ms).
-    - Returns None if value cannot be interpreted as timestamp.
+    Normalisasi berbagai representasi timestamp menjadi detik (int).
+    - Menerima int/float (detik atau millisecond), string numerik (detik atau ms).
+    - Mengembalikan None jika nilai tidak bisa diinterpretasikan sebagai timestamp.
     """
     try:
         if ts is None:
             return None
 
-        # If already numeric types
+        # Jika sudah berupa tipe numerik
         if isinstance(ts, (int, float)):
             val = int(ts)
-        # Numeric string (allow negative? usually no — keep simple)
+        # String numerik
         elif isinstance(ts, str):
             s = ts.strip()
-            # Accept purely numeric strings
             if s.isdigit():
                 val = int(s)
             else:
-                # Try to parse ISO-like numeric fraction? not necessary here
                 return None
         else:
             return None
 
-        # If value looks like milliseconds ( > year 3000 in seconds ), convert to seconds.
-        # Use conservative threshold: anything > 3_000_000_000 -> probably ms.
+        # Jika terlihat seperti milliseconds (nilai sangat besar), konversi ke detik
         if val > 3_000_000_000:
             val = int(val / 1000)
         return val
@@ -71,19 +68,26 @@ def _normalize_ts_input(ts):
 
 
 def _format_ts(ts):
+    """
+    Format timestamp (detik) menjadi string tanggal yang mudah dibaca.
+    Jika tidak dapat dinormalisasi, kembalikan representasi string aslinya.
+    """
     try:
         norm = _normalize_ts_input(ts)
         if norm is not None:
             dt = datetime.fromtimestamp(int(norm))
             mon = _MONTH_ID.get(dt.month, dt.strftime("%b"))
             return f"{dt.day:02d} {mon} {dt.year} {dt.strftime('%H:%M:%S')}"
-        # If it's a non-numeric string (maybe ISO), try to return it as-is
         return str(ts)
     except Exception:
         return str(ts)
 
 
 def _days_until(ts):
+    """
+    Hitung sisa hari dari sekarang sampai timestamp target (jika bisa dinormalisasi).
+    Mengembalikan None jika tidak bisa dihitung.
+    """
     try:
         norm = _normalize_ts_input(ts)
         if norm is None:
@@ -97,6 +101,9 @@ def _days_until(ts):
 
 
 def _get_bar_width(min_w: int = 12, max_w: int = 48, reserved: int = 60) -> int:
+    """
+    Hitung lebar bar kuota berdasarkan lebar console, dengan batas minimal dan maksimal.
+    """
     try:
         total = console.size.width or 80
         avail = max(10, total - reserved)
@@ -107,10 +114,10 @@ def _get_bar_width(min_w: int = 12, max_w: int = 48, reserved: int = 60) -> int:
 
 def _render_progress_bar(remaining: int, total: int, width: int | None = None, fill_char: str = "▒", empty_char: str = "░"):
     """
-    Render a horizontal bar that reflects remaining / total.
-    - remaining, total: numbers (use bytes for DATA)
-    - width: number of character cells for the bar (auto-calculated if None)
-    Color rules:
+    Render bar horizontal yang menggambarkan remaining / total.
+    - remaining, total: angka (gunakan bytes untuk DATA)
+    - width: jumlah karakter untuk bar (hitung otomatis jika None)
+    Aturan warna:
       pct >= 100 -> neon_green
       pct >= 50  -> neon_yellow
       pct >= 20  -> orange1
@@ -131,7 +138,6 @@ def _render_progress_bar(remaining: int, total: int, width: int | None = None, f
         empty_part = empty_char * (width - filled)
         pct = int(round(frac * 100))
 
-        # color selection (cleaned)
         if pct >= 100:
             color = "neon_green"
         elif pct >= 50:
@@ -148,6 +154,9 @@ def _render_progress_bar(remaining: int, total: int, width: int | None = None, f
 
 
 def _compute_quotas_summary(quotas):
+    """
+    Hitung ringkasan kuota DATA: total dan remaining (dalam bytes).
+    """
     total = 0
     remaining = 0
     for q in quotas:
@@ -165,8 +174,8 @@ def _compute_quotas_summary(quotas):
 
 def _first_timestamp_from(obj, keys):
     """
-    Return first non-empty value for any key in keys from obj (dict).
-    Supports nested dicts if key itself contains dots (e.g. 'package_option.activated_at').
+    Kembalikan nilai pertama yang tidak kosong untuk salah satu key di keys dari obj (dict).
+    Mendukung pencarian nested jika key mengandung titik (mis. 'package_option.activated_at').
     """
     for k in keys:
         if "." in k:
@@ -188,6 +197,9 @@ def _first_timestamp_from(obj, keys):
 
 
 def show_package_details(api_key, tokens, package_option_code, is_enterprise, option_order = -1):
+    """
+    Tampilkan detail paket (ketika user memilih paket di daftar paket).
+    """
     active_user = AuthInstance.active_user
     subscription_type = active_user.get("subscription_type", "") if active_user else ""
 
@@ -230,7 +242,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
         )
     ]
 
-    # Details Table
+    # Table detail paket
     details_table = Table(show_header=False, box=None, padding=(0, 1))
     details_table.add_column("Key", style="neon_cyan", justify="right")
     details_table.add_column("Value", style="bold white")
@@ -244,18 +256,22 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
     details_table.add_row("Kode Paket:", f"[neon_yellow]{package_option_code}[/]")
     details_table.add_row("Parent Code:", parent_code)
 
-    # Try many possible timestamp keys (from debug output we saw 'active_date', 'end_date', 'expired_at', etc.)
+    # Ambil family code jika tersedia dan letakkan sebelum Masa Aktif Kuota (sesuai permintaan)
+    family_code = package.get("package_family", {}).get("package_family_code", "") or package.get("package_family_code", "")
+    if family_code:
+        details_table.add_row("Family Code:", family_code)
+
+    # Cek banyak kemungkinan lokasi field timestamp (dari output debug terlihat berbagai nama)
     activated_ts = _first_timestamp_from(package, [
         "activated_at",
         "active_since",
         "active_date",
         "package_option.activated_at",
         "package_option.active_since",
-        "package.active_since",
         "package.activated_at",
+        "package.active_since",
         "start_date",
     ])
-    # For reset/end we prefer explicit end-like fields
     reset_ts = _first_timestamp_from(package, [
         "reset_at",
         "reset_quota_at",
@@ -294,9 +310,8 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
             remaining = int(benefit.get('remaining', benefit.get('total', 0)) or 0)
             total = int(benefit.get('total', 0) or 0)
 
-            # Build numeric display above the bar
+            # Tampilkan angka di atas bar sesuai tipe benefit
             if data_type == "DATA" and total > 0:
-                # format bytes
                 if remaining >= 1_000_000_000:
                     rem_display = f"{remaining / (1024 ** 3):.2f} GB"
                 elif remaining >= 1_000_000:
@@ -323,7 +338,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
             else:
                 numbers = f"{remaining} / {total}"
 
-            # Bar reflects remaining / total (full when remaining==total)
+            # Bar mencerminkan remaining / total
             if benefit.get("is_unlimited", False) or total == 0:
                 bar = _render_progress_bar(0, 1, width=bar_width)
                 numbers = "Unlimited" if benefit.get("is_unlimited", False) else numbers
@@ -450,7 +465,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
                 overwrite_amount=overwrite_amount,
             )
 
-            if res and res.get("status", "") != "SUCCESS":
+            if res and res.get("status") != "SUCCESS":
                 error_msg = res.get("message", "Unknown error")
                 if "Bizz-err.Amount.Total" in error_msg:
                     error_msg_arr = error_msg.split("=")
@@ -685,6 +700,9 @@ def get_packages_by_family(
     is_enterprise: bool | None = None,
     migration_type: str | None = None
 ):
+    """
+    Tampilkan paket berdasarkan family (menu beli paket).
+    """
     api_key = AuthInstance.api_key
     tokens = AuthInstance.get_active_tokens()
     if not tokens:
@@ -717,7 +735,7 @@ def get_packages_by_family(
     while in_package_menu:
         clear_screen()
 
-        # Family Info Panel
+        # Panel info family
         family_table = Table(show_header=False, box=None)
         family_table.add_column("Key", style="neon_cyan", justify="right")
         family_table.add_column("Value", style="bold white")
@@ -729,7 +747,7 @@ def get_packages_by_family(
 
         print_cyber_panel(family_table, title="FAMILY INFO")
 
-        # Packages List
+        # Daftar paket
         pkg_table = Table(show_header=True, header_style="neon_pink", box=None, padding=(0, 1))
         pkg_table.add_column("No", style="neon_green", justify="right", width=4)
         pkg_table.add_column("Package Name", style="bold white")
@@ -739,13 +757,10 @@ def get_packages_by_family(
 
         option_number = 1
 
-        # Rebuild packages list each render to ensure correct indexing if needed,
-        # though strictly speaking it's static per fetch.
         packages = []
 
         for variant in package_variants:
             variant_name = variant["name"]
-            # pkg_table.add_row("", f"[dim]{variant_name}[/]", "") # Section header style
 
             for option in variant["package_options"]:
                 option_name = option["name"]
@@ -797,6 +812,9 @@ def get_packages_by_family(
 
 
 def fetch_my_packages():
+    """
+    Tampilkan paket-paket yang aktif pada akun (menu 'My Packages').
+    """
     in_my_packages_menu = True
     while in_my_packages_menu:
         api_key = AuthInstance.api_key
@@ -827,7 +845,7 @@ def fetch_my_packages():
 
         quotas = res["data"].get("quotas", [])
 
-        # --- DEBUG HOOK (SEMENTARA, SELALU AKTIF) ---
+        # DEBUG HOOK (SEMENTARA, SELALU AKTIF)
         # Menampilkan struktur lengkap dan contoh quota[0] agar Anda bisa menyesuaikan field.
         console.print("[info]DEBUG (SEMENTARA): full response 'data' object from quota-details[/]")
         try:
@@ -844,13 +862,13 @@ def fetch_my_packages():
         else:
             console.print("[info]DEBUG (SEMENTARA): quotas list is empty[/]")
 
-        console.print("[warning]DEBUG MODE ENABLED - pausing so you can inspect output. Remove debug block to resume normal behavior.[/]")
+        console.print("[warning]DEBUG MODE ENABLED - pausing so you can inspect output. Hapus blok debug ini setelah selesai.[/]")
         pause()
-        # --- END DEBUG HOOK ---
+        # END DEBUG HOOK
 
         clear_screen()
 
-        # --- Paket Aktif header ---
+        # Header paket aktif
         try:
             active_user = AuthInstance.get_active_user() or {}
             account_number = active_user.get("number", "N/A")
@@ -859,7 +877,7 @@ def fetch_my_packages():
             account_number = "N/A"
             account_name = ""
 
-        # compute overall DATA quota summary and render centered bar (now bar uses remaining/total)
+        # Hitung ringkasan DATA dan render bar keseluruhan
         remaining_bytes, total_bytes = _compute_quotas_summary(quotas)
         if total_bytes > 0:
             numbers = f"{format_quota_byte(remaining_bytes)} / {format_quota_byte(total_bytes)}"
@@ -880,22 +898,26 @@ def fetch_my_packages():
         my_packages = []
         num = 1
 
-        # If quotas list empty
+        # Jika daftar quotas kosong
         if not quotas:
             console.print("[warning]No packages found.[/]")
             pause()
             return None
 
-        # Show detailed panels for each quota
+        # Tampilkan panel detail untuk setiap quota
         for quota in quotas:
             quota_code = quota.get("quota_code", "")
             quota_name = quota.get("name", "")
             product_subscription_type = quota.get("product_subscription_type", "")
             product_domain = quota.get("product_domain", "")
 
+            # Ambil group code jika ada (fallback ke package_group_code)
             group_code = quota.get("group_code", quota.get("package_group_code", ""))
 
-            # try multiple possible locations for timestamps (expanded to include active_date/end_date/expired_at/etc)
+            # Ambil family code jika tersedia
+            family_code = quota.get("package_family", {}).get("package_family_code", "") or quota.get("package_family_code", "")
+
+            # Cari banyak kemungkinan lokasi timestamp (aktif sejak / reset)
             active_since = _first_timestamp_from(quota, [
                 "activated_at",
                 "active_since",
@@ -928,6 +950,9 @@ def fetch_my_packages():
             detail_tbl.add_row("Quota Code:", f"[neon_yellow]{quota_code}[/]")
             if group_code:
                 detail_tbl.add_row("Group Code:", group_code)
+            # Tambahkan Family Code tepat di atas Masa Aktif Kuota (sesuai permintaan)
+            if family_code:
+                detail_tbl.add_row("Family Code:", family_code)
             if active_since:
                 detail_tbl.add_row("Masa Aktif Kuota:", _format_ts(active_since))
             if reset_at:
