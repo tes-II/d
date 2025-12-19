@@ -1,5 +1,6 @@
 import json
 import sys
+import os
 from datetime import datetime
 
 import requests
@@ -794,6 +795,29 @@ def fetch_my_packages():
             return None
 
         quotas = res["data"].get("quotas", [])
+
+        # --- DEBUG HOOK (sementara) ---
+        # Untuk menyalakan debug: export DEBUG_QUOTAS=1  (Linux/macOS)
+        # atau set DEBUG_QUOTAS=1 (Windows CMD / Powershell)
+        # Jika aktif, akan menampilkan response/res["data"] dan contoh quota[0],
+        # lalu berhenti sejenak agar Anda bisa melihat struktur JSON yang dikembalikan API.
+        debug_enabled = os.environ.get("DEBUG_QUOTAS", "0") == "1"
+        if debug_enabled:
+            console.print("[info]DEBUG: full response 'data' object from quota-details[/]")
+            try:
+                console.print_json(data=res.get("data", {}))
+            except Exception:
+                console.print(f"[warning]Unable to pretty-print full data. Raw: {res.get('data')}[/]")
+            console.print("[info]DEBUG: sample quota (first item) if available[/]")
+            if quotas:
+                try:
+                    console.print_json(data=quotas[0])
+                except Exception:
+                    console.print(f"[warning]Unable to pretty-print quota[0]. Raw: {quotas[0]}[/]")
+            else:
+                console.print("[info]DEBUG: quotas list is empty[/]")
+            pause()
+        # --- END DEBUG HOOK ---
 
         clear_screen()
 
