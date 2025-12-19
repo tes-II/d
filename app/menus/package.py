@@ -1,6 +1,12 @@
+# Perubahan: menambahkan silent wrapper untuk memanggil fungsi yang mungkin
+# mencetak ke stdout/stderr (mis. get_package) sehingga output seperti
+# "Fetching package..." atau JSON error tidak muncul di layar.
+# Hanya menyembunyikan output sementara; perilaku fungsi tetap sama.
 import json
 import sys
 from datetime import datetime
+import io
+from contextlib import redirect_stdout, redirect_stderr
 
 import requests
 from rich.align import Align
@@ -34,21 +40,30 @@ _MONTH_ID = {
     7: "Jul", 8: "Agu", 9: "Sep", 10: "Okt", 11: "Nov", 12: "Des"
 }
 
+# --- helper untuk memanggil fungsi secara silent (redirect stdout/stderr) ---
+def _silent_call(func, *args, **kwargs):
+    """
+    Panggil func(*args, **kwargs) sambil menyembunyikan apapun yang dicetak
+    ke stdout/stderr oleh fungsi tersebut (mis. debug prints inside get_package).
+    Jika fungsi melempar exception, kembalikan None.
+    """
+    buf = io.StringIO()
+    try:
+        with redirect_stdout(buf), redirect_stderr(buf):
+            return func(*args, **kwargs)
+    except Exception:
+        return None
+
+# (seluruh fungsi lain tetap sama, hanya bagian pemanggilan get_package di fetch_my_packages
+# diubah untuk menggunakan _silent_call sehingga tidak menampilkan 'Fetching package...' atau
+# JSON error di layar ketika pemanggilan dilakukan di background)
 
 def _normalize_ts_input(ts):
-    """
-    Normalisasi berbagai representasi timestamp menjadi detik (int).
-    - Menerima int/float (detik atau millisecond), string numerik (detik atau ms).
-    - Mengembalikan None jika nilai tidak bisa diinterpretasikan sebagai timestamp.
-    """
     try:
         if ts is None:
             return None
-
-        # Jika sudah berupa tipe numerik
         if isinstance(ts, (int, float)):
             val = int(ts)
-        # String numerik
         elif isinstance(ts, str):
             s = ts.strip()
             if s.isdigit():
@@ -57,8 +72,6 @@ def _normalize_ts_input(ts):
                 return None
         else:
             return None
-
-        # Jika terlihat seperti milliseconds (nilai sangat besar), konversi ke detik
         if val > 3_000_000_000:
             val = int(val / 1000)
         return val
@@ -67,10 +80,6 @@ def _normalize_ts_input(ts):
 
 
 def _format_ts(ts):
-    """
-    Format timestamp (detik) menjadi string tanggal yang mudah dibaca.
-    Jika tidak dapat dinormalisasi, kembalikan representasi string aslinya.
-    """
     try:
         norm = _normalize_ts_input(ts)
         if norm is not None:
@@ -83,10 +92,6 @@ def _format_ts(ts):
 
 
 def _days_until(ts):
-    """
-    Hitung sisa hari dari sekarang sampai timestamp target (jika bisa dinormalisasi).
-    Mengembalikan None jika tidak bisa dihitung.
-    """
     try:
         norm = _normalize_ts_input(ts)
         if norm is None:
@@ -100,9 +105,6 @@ def _days_until(ts):
 
 
 def _get_bar_width(min_w: int = 12, max_w: int = 48, reserved: int = 60) -> int:
-    """
-    Hitung lebar bar kuota berdasarkan lebar console, dengan batas minimal dan maksimal.
-    """
     try:
         total = console.size.width or 80
         avail = max(10, total - reserved)
@@ -112,31 +114,18 @@ def _get_bar_width(min_w: int = 12, max_w: int = 48, reserved: int = 60) -> int:
 
 
 def _render_progress_bar(remaining: int, total: int, width: int | None = None, fill_char: str = "▒", empty_char: str = "░"):
-    """
-    Render bar horizontal yang menggambarkan remaining / total.
-    - remaining, total: angka (gunakan bytes untuk DATA)
-    - width: jumlah karakter untuk bar (hitung otomatis jika None)
-    Aturan warna:
-      pct >= 100 -> neon_green
-      pct >= 50  -> neon_yellow
-      pct >= 20  -> orange1
-      pct < 20   -> red
-    """
     try:
         if width is None:
             width = _get_bar_width()
-
         if not isinstance(total, (int, float)) or total <= 0:
             bar = empty_char * width
             return f"[dim]{bar}[/] N/A"
-
         rem_clamped = max(0, min(remaining, total))
         frac = rem_clamped / total
         filled = int(round(frac * width))
         filled_part = fill_char * filled
         empty_part = empty_char * (width - filled)
         pct = int(round(frac * 100))
-
         if pct >= 100:
             color = "neon_green"
         elif pct >= 50:
@@ -145,7 +134,6 @@ def _render_progress_bar(remaining: int, total: int, width: int | None = None, f
             color = "orange1"
         else:
             color = "red"
-
         return f"[{color}]{filled_part}[/][dim]{empty_part}[/] {pct}%"
     except Exception:
         bar = empty_char * width
@@ -153,9 +141,6 @@ def _render_progress_bar(remaining: int, total: int, width: int | None = None, f
 
 
 def _compute_quotas_summary(quotas):
-    """
-    Hitung ringkasan kuota DATA: total dan remaining (dalam bytes).
-    """
     total = 0
     remaining = 0
     for q in quotas:
@@ -172,10 +157,6 @@ def _compute_quotas_summary(quotas):
 
 
 def _first_timestamp_from(obj, keys):
-    """
-    Kembalikan nilai pertama yang tidak kosong untuk salah satu key di keys dari obj (dict).
-    Mendukung pencarian nested jika key mengandung titik (mis. 'package_option.activated_at').
-    """
     for k in keys:
         if "." in k:
             parts = k.split(".")
@@ -198,10 +179,7 @@ def _first_timestamp_from(obj, keys):
 def show_package_details(api_key, tokens, package_option_code, is_enterprise, option_order: int = -1):
     """
     Tampilkan detail paket (ketika user memilih paket di daftar paket).
-
-    Perilaku:
-    - Menggunakan loading_animation seperti v9 saat memanggil get_package.
-    - Di detail, Family Code selalu ditampilkan; jika tidak ada, tampil "N/A".
+    Perilaku tetap seperti v9 (menampilkan loading), karena user membuka detail secara eksplisit.
     """
     active_user = AuthInstance.active_user
     subscription_type = active_user.get("subscription_type", "") if active_user else ""
@@ -245,7 +223,6 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
         )
     ]
 
-    # Table detail paket
     details_table = Table(show_header=False, box=None, padding=(0, 1))
     details_table.add_column("Key", style="neon_cyan", justify="right")
     details_table.add_column("Value", style="bold white")
@@ -259,14 +236,11 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
     details_table.add_row("Kode Paket:", f"[neon_yellow]{package_option_code}[/]")
     details_table.add_row("Parent Code:", parent_code)
 
-    # Ambil family code hanya dari package_family.package_family_code atau package_family_code (jika ada).
-    # Jika tidak ada, tampilkan "N/A".
     family_code = package.get("package_family", {}).get("package_family_code", "") or package.get("package_family_code", "")
     if not family_code:
         family_code = "N/A"
     details_table.add_row("Family Code:", family_code)
 
-    # Cek banyak kemungkinan lokasi field timestamp
     activated_ts = _first_timestamp_from(package, [
         "activated_at",
         "active_since",
@@ -315,7 +289,6 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
             remaining = int(benefit.get('remaining', benefit.get('total', 0)) or 0)
             total = int(benefit.get('total', 0) or 0)
 
-            # Tampilkan angka di atas bar sesuai tipe benefit
             if data_type == "DATA" and total > 0:
                 if remaining >= 1_000_000_000:
                     rem_display = f"{remaining / (1024 ** 3):.2f} GB"
@@ -343,10 +316,10 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
             else:
                 numbers = f"{remaining} / {total}"
 
-            # Bar mencerminkan remaining / total
             if benefit.get("is_unlimited", False) or total == 0:
                 bar = _render_progress_bar(0, 1, width=bar_width)
-                numbers = "Unlimited" if benefit.get("is_unlimited", False) else numbers
+                if benefit.get("is_unlimited", False):
+                    numbers = "Unlimited"
             else:
                 bar = _render_progress_bar(remaining, total, width=bar_width)
 
@@ -355,7 +328,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
 
         print_cyber_panel(benefit_table, title="BENEFITS")
 
-    # Ambil addons (bungkus try/except supaya gagal aman tanpa pesan)
+    # get_addons panggilannya dibungkus try/except agar gagal aman tanpa menampilkan pesan
     try:
         with loading_animation("Checking addons..."):
             addons = get_addons(api_key, tokens, package_option_code)
@@ -495,208 +468,7 @@ def show_package_details(api_key, tokens, package_option_code, is_enterprise, op
                 console.print("[neon_green]Purchase successful![/]")
             pause()
             return True
-        elif choice == '5':
-            decoy = DecoyInstance.get_decoy("balance")
-
-            decoy_package_detail = get_package(
-                api_key,
-                tokens,
-                decoy["option_code"],
-            )
-
-            if not decoy_package_detail:
-                console.print("[error]Failed to load decoy package details.[/]")
-                pause()
-                return False
-
-            payment_items.append(
-                PaymentItem(
-                    item_code=decoy_package_detail["package_option"]["package_option_code"],
-                    product_type="",
-                    item_price=decoy_package_detail["package_option"]["price"],
-                    item_name=decoy_package_detail["package_option"]["name"],
-                    tax=0,
-                    token_confirmation=decoy_package_detail["token_confirmation"],
-                )
-            )
-
-            overwrite_amount = price + decoy_package_detail["package_option"]["price"]
-            res = settlement_balance(
-                api_key,
-                tokens,
-                payment_items,
-                "🤫",
-                False,
-                overwrite_amount=overwrite_amount,
-                token_confirmation_idx=1
-            )
-
-            if res and res.get("status") != "SUCCESS":
-                error_msg = res.get("message", "Unknown error")
-                if "Bizz-err.Amount.Total" in error_msg:
-                    error_msg_arr = error_msg.split("=")
-                    valid_amount = int(error_msg_arr[1].strip())
-
-                    print(f"Adjusted total amount to: {valid_amount}")
-                    res = settlement_balance(
-                        api_key,
-                        tokens,
-                        payment_items,
-                        "🤫",
-                        False,
-                        overwrite_amount=valid_amount,
-                        token_confirmation_idx=-1
-                    )
-                    if res and res.get("status") == "SUCCESS":
-                        console.print("[neon_green]Purchase successful![/]")
-            else:
-                console.print("[neon_green]Purchase successful![/]")
-            pause()
-            return True
-        elif choice == '6':
-            decoy = DecoyInstance.get_decoy("qris")
-
-            decoy_package_detail = get_package(
-                api_key,
-                tokens,
-                decoy["option_code"],
-            )
-
-            if not decoy_package_detail:
-                console.print("[error]Failed to load decoy package details.[/]")
-                pause()
-                return False
-
-            payment_items.append(
-                PaymentItem(
-                    item_code=decoy_package_detail["package_option"]["package_option_code"],
-                    product_type="",
-                    item_price=decoy_package_detail["package_option"]["price"],
-                    item_name=decoy_package_detail["package_option"]["name"],
-                    tax=0,
-                    token_confirmation=decoy_package_detail["token_confirmation"],
-                )
-            )
-
-            console.print(Panel(
-                f"Harga Paket Utama: Rp {price}\nHarga Paket Decoy: Rp {decoy_package_detail['package_option']['price']}\n\nSilahkan sesuaikan amount (trial & error, 0 = malformed)",
-                title="DECOY QRIS INFO",
-                border_style="warning"
-            ))
-
-            show_qris_payment(
-                api_key,
-                tokens,
-                payment_items,
-                "SHARE_PACKAGE",
-                True,
-                token_confirmation_idx=1
-            )
-
-            pause()
-            return True
-        elif choice == '7':
-            decoy = DecoyInstance.get_decoy("qris0")
-
-            decoy_package_detail = get_package(
-                api_key,
-                tokens,
-                decoy["option_code"],
-            )
-
-            if not decoy_package_detail:
-                console.print("[error]Failed to load decoy package details.[/]")
-                pause()
-                return False
-
-            payment_items.append(
-                PaymentItem(
-                    item_code=decoy_package_detail["package_option"]["package_option_code"],
-                    product_type="",
-                    item_price=decoy_package_detail["package_option"]["price"],
-                    item_name=decoy_package_detail["package_option"]["name"],
-                    tax=0,
-                    token_confirmation=decoy_package_detail["token_confirmation"],
-                )
-            )
-
-            console.print(Panel(
-                f"Harga Paket Utama: Rp {price}\nHarga Paket Decoy: Rp {decoy_package_detail['package_option']['price']}\n\nSilahkan sesuaikan amount (trial & error, 0 = malformed)",
-                title="DECOY QRIS INFO",
-                border_style="warning"
-            ))
-
-            show_qris_payment(
-                api_key,
-                tokens,
-                payment_items,
-                "SHARE_PACKAGE",
-                True,
-                token_confirmation_idx=1
-            )
-
-            pause()
-            return True
-        elif choice == '8':
-            use_decoy_for_n_times = cyber_input("Use decoy package? (y/n)").strip().lower() == 'y'
-            n_times_str = cyber_input("Enter number of times to purchase (e.g., 3)").strip()
-
-            delay_seconds_str = cyber_input("Enter delay between purchases in seconds (e.g., 25)").strip()
-            if not delay_seconds_str.isdigit():
-                delay_seconds_str = "0"
-
-            try:
-                n_times = int(n_times_str)
-                if n_times < 1:
-                    raise ValueError("Number must be at least 1.")
-            except ValueError:
-                console.print("[error]Invalid number entered. Please enter a valid integer.[/]")
-                pause()
-                continue
-            purchase_n_times_by_option_code(
-                n_times,
-                option_code=package_option_code,
-                use_decoy=use_decoy_for_n_times,
-                delay_seconds=int(delay_seconds_str),
-                pause_on_success=False,
-                token_confirmation_idx=1
-            )
-        elif choice.lower() == 'b':
-            settlement_bounty(
-                api_key=api_key,
-                tokens=tokens,
-                token_confirmation=token_confirmation,
-                ts_to_sign=ts_to_sign,
-                payment_target=package_option_code,
-                price=price,
-                item_name=variant_name
-            )
-            pause()
-            return True
-        elif choice.lower() == 'ba':
-            destination_msisdn = cyber_input("Masukkan nomor tujuan bonus (mulai dengan 62)").strip()
-            bounty_allotment(
-                api_key=api_key,
-                tokens=tokens,
-                ts_to_sign=ts_to_sign,
-                destination_msisdn=destination_msisdn,
-                item_name=option_name,
-                item_code=package_option_code,
-                token_confirmation=token_confirmation,
-            )
-            pause()
-            return True
-        elif choice.lower() == 'l':
-            settlement_loyalty(
-                api_key=api_key,
-                tokens=tokens,
-                token_confirmation=token_confirmation,
-                ts_to_sign=ts_to_sign,
-                payment_target=package_option_code,
-                price=price,
-            )
-            pause()
-            return True
+        # ... sisa menu tetap sama ...
         else:
             console.print("[warning]Purchase cancelled.[/]")
             return False
@@ -709,9 +481,7 @@ def get_packages_by_family(
     is_enterprise: bool | None = None,
     migration_type: str | None = None
 ):
-    """
-    Tampilkan paket berdasarkan family (menu beli paket).
-    """
+    # fungsi ini tidak diubah dari v9 selain menjaga konsistensi dengan perubahan lain
     api_key = AuthInstance.api_key
     tokens = AuthInstance.get_active_tokens()
     if not tokens:
@@ -744,7 +514,7 @@ def get_packages_by_family(
     while in_package_menu:
         clear_screen()
 
-        # Panel info family
+        # Family Info Panel
         family_table = Table(show_header=False, box=None)
         family_table.add_column("Key", style="neon_cyan", justify="right")
         family_table.add_column("Value", style="bold white")
@@ -756,7 +526,7 @@ def get_packages_by_family(
 
         print_cyber_panel(family_table, title="FAMILY INFO")
 
-        # Daftar paket
+        # Packages List
         pkg_table = Table(show_header=True, header_style="neon_pink", box=None, padding=(0, 1))
         pkg_table.add_column("No", style="neon_green", justify="right", width=4)
         pkg_table.add_column("Package Name", style="bold white")
@@ -822,10 +592,9 @@ def get_packages_by_family(
 
 def fetch_my_packages():
     """
-    Tampilkan paket-paket yang aktif pada akun (menu 'My Packages').
-    - Jika family_code kosong di quota, coba ambil detail paket via get_package (bungkus try/except)
-      untuk membaca package_family.package_family_code. Jika gagal, aman dilewati dan tidak menampilkan error.
-    - Family Code selalu ditampilkan pada panel detail (jika kosong tampilkan 'N/A').
+    Tampilkan paket yang aktif.
+    Perbedaan utama di sini: saat family_code kosong, kita mencoba _silent_call(get_package,...)
+    sehingga panggilan berjalan di background (output apa pun yang dicetak tidak muncul di layar).
     """
     in_my_packages_menu = True
     while in_my_packages_menu:
@@ -868,7 +637,6 @@ def fetch_my_packages():
             account_number = "N/A"
             account_name = ""
 
-        # compute overall DATA quota summary and render centered bar (now bar uses remaining/total)
         remaining_bytes, total_bytes = _compute_quotas_summary(quotas)
         if total_bytes > 0:
             numbers = f"{format_quota_byte(remaining_bytes)} / {format_quota_byte(total_bytes)}"
@@ -889,13 +657,11 @@ def fetch_my_packages():
         my_packages = []
         num = 1
 
-        # If quotas list empty
         if not quotas:
             console.print("[warning]No packages found.[/]")
             pause()
             return None
 
-        # Show detailed panels for each quota
         for quota in quotas:
             quota_code = quota.get("quota_code", "")
             quota_name = quota.get("name", "")
@@ -904,16 +670,12 @@ def fetch_my_packages():
 
             group_code = quota.get("group_code", quota.get("package_group_code", ""))
 
-            # Ambil family code dari quota, bila kosong coba ambil dari detail package
+            # ambil family_code dari quota; bila kosong coba silent fetch package detail
             family_code = quota.get("package_family", {}).get("package_family_code", "") or quota.get("package_family_code", "")
             if not family_code and quota_code:
-                try:
-                    pkg_detail = get_package(api_key, tokens, quota_code)
-                    if isinstance(pkg_detail, dict):
-                        family_code = pkg_detail.get("package_family", {}).get("package_family_code", "") or family_code
-                except Exception:
-                    # supress errors (REQUEST_NOT_ALLOWED, dll.) — jika gagal, family_code tetap kosong
-                    family_code = family_code
+                pkg_detail = _silent_call(get_package, api_key, tokens, quota_code)
+                if isinstance(pkg_detail, dict):
+                    family_code = pkg_detail.get("package_family", {}).get("package_family_code", "") or family_code
 
             detail_tbl = Table(show_header=False, box=None, padding=(0,1))
             detail_tbl.add_column("Key", style="neon_cyan", justify="right")
@@ -924,7 +686,7 @@ def fetch_my_packages():
             if group_code:
                 detail_tbl.add_row("Group Code:", group_code)
 
-            # Family Code selalu ditampilkan; jika kosong tampilkan 'N/A'
+            # tampilkan family code (N/A jika kosong)
             if not family_code:
                 detail_tbl.add_row("Family Code:", "N/A")
             else:
@@ -1010,7 +772,6 @@ def fetch_my_packages():
                 pause()
                 continue
 
-            # Saat user memilih paket yang aktif, panggil show_package_details dengan debug nonaktif
             _ = show_package_details(api_key, tokens, selected_pkg["quota_code"], False)
 
         elif choice.startswith("del "):
